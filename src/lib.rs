@@ -19,6 +19,8 @@ use std::net::TcpStream;
 
 use std::mem;
 
+use std::fs::File;
+
 extern crate time;
 
 extern crate crc;
@@ -43,7 +45,8 @@ pub struct Mtprs {
     stream: TcpStream,
     seq_num: u32,
     server_seq_num: u32,
-    rsa: rsa::Rsa
+    rsa: rsa::Rsa,
+    auth_key: Option<[u8; 256]>
 }
 
 impl Mtprs {
@@ -60,11 +63,25 @@ wFnK7a+XYl9sluzHRyVVaTTveB2GazTwEfzk2DWgkBluml8OREmvfraX3bkHZJTK
 X4EQSjBbbdJ2ZXIsRrYOXfaA+xayEGB+8hdlLmAjbCVfaigxX0CDqWeR1yFL9kwd
 9P0NsZRPsmoqVwMbMu7mStFai6aIhc3nSlv8kg9qv1m6XHVQY3PnEw+QQtqSIXkl
 HwIDAQAB
------END PUBLIC KEY-----").unwrap()
+-----END PUBLIC KEY-----").unwrap(),
+            auth_key: None
         }
     }
 
     pub fn auth(&mut self) -> io::Result<()> {
+        if let Ok(mut f) = File::open("auth.key") {
+            let mut auth_key_arr = [0u8; 256];
+            f.read_exact(&mut auth_key_arr)?;
+            self.auth_key = Some(auth_key_arr);
+        } else {
+            self.gen_auth()?;
+            let mut f = File::create("auth.key")?;
+            f.write_all(&self.auth_key.unwrap())?;
+        }
+        Ok(())
+    }
+
+    pub fn gen_auth(&mut self) -> io::Result<()> {
         let mut nonce = [0; 16];
         let mut server_nonce = [0; 16];
         let mut new_nonce = [0; 32];
@@ -182,7 +199,7 @@ HwIDAQAB
         let mut raw_b = [0; 256];
         rand::thread_rng().fill_bytes(&mut raw_b);
         let b = BigUint::from_bytes_be(&raw_b);
-        let g_b = pow_mod(g, b, &p);
+        let g_b = pow_mod(&BigUint::from_u8(g).unwrap(), &b, &p);
         let raw_g_b = g_b.to_bytes_be();
 
         let (mut data, mut buf) = ([0; 336], [0; 376]);
@@ -201,6 +218,12 @@ HwIDAQAB
         buf[20..36].copy_from_slice(&server_nonce);
         buf[36..40].copy_from_slice(&[0xFE, 0x50, 0x01, 0x00]);
         self.send(&buf)?;
+
+        let auth_key = pow_mod(&g_a, &b, &p);
+        let auth_key = auth_key.to_bytes_be();
+        let mut auth_key_arr = [0; 256];
+        auth_key_arr[256 - auth_key.len()..256].copy_from_slice(&auth_key);
+        self.auth_key = Some(auth_key_arr);
 
         let mut buf = self.recv()?;
         if buf.drain(..4).collect::<Vec<u8>>() != vec![0x34, 0xF7, 0xCB, 0x3B] {
@@ -317,8 +340,8 @@ fn factor(n: u64) -> u32 {
 }
 
 // (b ** e) % m
-fn pow_mod(b: u8, e: BigUint, m: &BigUint) -> BigUint {
-    let mut b = BigUint::from_u8(b).unwrap();
+fn pow_mod(b: &BigUint, e: &BigUint, m: &BigUint) -> BigUint {
+    let mut b = b.clone();
     let mut e = e.clone();
     let one = BigUint::from_u32(1).unwrap();
     let mut res = one.clone();
