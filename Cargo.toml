@@ -1,0 +1,11 @@
+[package]
+name = "mtprs"
+version = "0.1.0"
+authors = ["KeyboardFire <andy@keyboardfire.com>"]
+
+[dependencies]
+time = "0.1.36"
+crc = "1.4.0"
+rand = "0.3.15"
+num = "0.1.37"
+openssl = "0.9.11"
